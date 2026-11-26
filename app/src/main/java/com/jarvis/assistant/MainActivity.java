@@ -86,6 +86,17 @@ public class MainActivity extends Activity {
         layout.addView(input,
             new LinearLayout.LayoutParams(-1, -2));
 
+        Spinner language = new Spinner(this);
+        String[] languages = {"English", "Hindi", "Marathi"};
+        language.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, languages));
+        language.setSelection(getPreferences(0).getInt("language", 0));
+        language.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                getPreferences(0).edit().putInt("language", position).apply();
+            }
+            public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        layout.addView(language);
         Button send = new Button(this);
         send.setText("SEND");
         layout.addView(send);
@@ -279,13 +290,11 @@ public class MainActivity extends Activity {
                     String lower =
                         text.toLowerCase(Locale.ROOT);
 
-                    if (lower.contains("hey jarvis")) {
+                    if (lower.contains("hey jarvis") || lower.contains("हे जार्विस") || lower.contains("हे जारविस")) {
 
                         awake = true;
 
-                        String rest = text.substring(
-                            lower.indexOf("hey jarvis")
-                            + 10).trim();
+                        String rest = lower.contains("hey jarvis") ? text.substring(lower.indexOf("hey jarvis") + 10).trim() : "";
 
                         if (rest.isEmpty()) {
                             speak("Yes sir, how can I help?");
@@ -328,7 +337,7 @@ public class MainActivity extends Activity {
             RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
 
         i.putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE, "en-IN");
+            RecognizerIntent.EXTRA_LANGUAGE, new String[]{"en-IN","hi-IN","mr-IN"}[getPreferences(0).getInt("language",0)]);
 
         status.setText(
             awake ? "LISTENING..." : "SAY HEY JARVIS");
@@ -347,6 +356,8 @@ public class MainActivity extends Activity {
         status.setText(text);
 
         if (voiceReady && voice != null) {
+            int lang = getPreferences(0).getInt("language",0);
+            voice.setLanguage(lang == 0 ? Locale.UK : new Locale(lang == 1 ? "hi" : "mr", "IN"));
             voice.speak(text,
                 TextToSpeech.QUEUE_FLUSH,
                 null, "jarvis");
@@ -373,6 +384,19 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if (q.equals("open settings")) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS)); speak("Opening settings, sir."); } catch (Exception e) { speak("Settings unavailable."); }
+            return;
+        }
+        if (q.equals("volume up") || q.equals("volume down")) {
+            android.media.AudioManager audio = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            audio.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, q.equals("volume up") ? 1 : -1, android.media.AudioManager.FLAG_SHOW_UI);
+            speak("Volume adjusted, sir."); return;
+        }
+        if (q.equals("battery status")) {
+            android.os.BatteryManager battery = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
+            speak("Battery is at " + battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) + " percent, sir."); return;
+        }
         if (q.contains("what time")) {
             speak(new java.text.SimpleDateFormat(
                 "hh:mm a", Locale.UK)
