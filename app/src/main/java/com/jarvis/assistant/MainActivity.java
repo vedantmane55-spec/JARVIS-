@@ -21,6 +21,27 @@ public class MainActivity extends Activity {
     EditText input, api;
     JarvisService service;
     Button send, stop, clear;
+    VoiceOrb orb;
+    FrameLayout stage;
+    ScrollView settings;
+    boolean inSettings() { return settings.getVisibility()==View.VISIBLE; }
+    void showSettings(boolean show) {
+        settings.setVisibility(show?View.VISIBLE:View.GONE);
+        orb.setVisibility(show?View.GONE:View.VISIBLE);
+        if (!show) {
+            ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(stage.getWindowToken(),0);
+        }
+        getWindow().getDecorView().setSystemUiVisibility(show?View.SYSTEM_UI_FLAG_VISIBLE:
+            View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+    @Override public void onBackPressed() {
+        if(inSettings()) showSettings(false); else super.onBackPressed();
+    }
+    void beginVoice() {
+        if(checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO},1);
+        } else activate();
+    }
     android.net.Uri picture;
     boolean reviewing;
     void button(LinearLayout layout, String label, Runnable action) {
@@ -141,7 +162,7 @@ public class MainActivity extends Activity {
     public void onCreate(Bundle b) {
         super.onCreate(b);
 
-        ScrollView scroll = new ScrollView(this);
+        settings = new ScrollView(this);
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(1);
@@ -149,15 +170,12 @@ public class MainActivity extends Activity {
         layout.setGravity(Gravity.CENTER);
         layout.setBackgroundColor(Color.rgb(3, 12, 24));
 
-        TextView title = new TextView(this);
-        title.setText("J A R V I S  /  3.2");
-        title.setTextSize(36);
-        title.setTextColor(Color.CYAN);
-        layout.addView(title);
-
-        layout.addView(new Reactor(),
-            new LinearLayout.LayoutParams(-1, 350));
-
+        button(layout,"Return to voice orb",()->showSettings(false));
+        android.widget.Switch studio = new android.widget.Switch(this);
+        studio.setText("Studio assistant voice (Gemini)");
+        studio.setChecked(getPreferences(0).getBoolean("studio_voice",true));
+        studio.setOnCheckedChangeListener((bttn,enabled)->getPreferences(0).edit().putBoolean("studio_voice",enabled).apply());
+        layout.addView(studio);
         status = new TextView(this);
         status.setText("SYSTEM ONLINE");
         status.setTextSize(18);
@@ -275,61 +293,30 @@ public class MainActivity extends Activity {
 
         clear.setOnClickListener(v -> service.command("clear memory"));
         enableCommands(false);
-        scroll.addView(layout);
-        setContentView(scroll);
+        settings.addView(layout);
+        stage = new FrameLayout(this);
+        orb = new VoiceOrb(this);
+        orb.setOnClickListener(v -> beginVoice());
+        orb.setOnLongClickListener(v->{ showSettings(true); return true; });
+        stage.addView(orb); stage.addView(settings);
+        setContentView(stage);
+        showSettings(b!=null && b.getBoolean("settings"));
+        if (!getPreferences(0).getBoolean("orb_hint",false)) {
+            Toast.makeText(this,"Tap to speak • Hold the orb for settings",Toast.LENGTH_LONG).show();
+            getPreferences(0).edit().putBoolean("orb_hint",true).apply();
+        }
         bindService(new Intent(this, JarvisService.class), connection, BIND_AUTO_CREATE);
     }
 
-    class Reactor extends View {
-
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        float angle = 0;
-
-        Reactor() {
-            super(MainActivity.this);
-        }
-
-        @Override
-        protected void onDraw(Canvas c) {
-            super.onDraw(c);
-
-            boolean busy = service != null && service.busy;
-            boolean awake = service != null && service.awake;
-            float x = getWidth() / 2f;
-            float y = getHeight() / 2f;
-            float r = Math.min(x, y) * 0.8f;
-
-            p.setColor(busy ? Color.rgb(255,65,65) : Color.CYAN);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(4);
-
-            c.drawCircle(x, y, r * 0.55f, p);
-            c.drawCircle(x, y, r * 0.75f, p);
-
-            RectF rect = new RectF(
-                x-r, y-r, x+r, y+r);
-
-            for (int i = 0; i < 6; i++) {
-                c.drawArc(rect,
-                    angle + i * 60, 40, false, p);
-            }
-
-            p.setStyle(Paint.Style.FILL);
-            p.setTextSize(28);
-            p.setTextAlign(Paint.Align.CENTER);
-            c.drawText(busy ? "PROCESSING" : awake ? "ONLINE" : "STANDBY", x, y + 10, p);
-
-            angle = (angle + 2) % 360;
-            postInvalidateDelayed(40);
-        }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state); state.putBoolean("settings",inSettings());
     }
-
     void camera() {
         try { startActivityForResult(new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE),23); }
         catch (android.content.ActivityNotFoundException e) { status.setText("Use Attach diagram to choose a photo."); }
     }
     void activate() {
-        Intent intent = new Intent(this, JarvisService.class);
+        Intent intent = new Intent(this, JarvisService.class).setAction("TALK");
         if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
     }

@@ -25,6 +25,21 @@ public class JarvisService extends Service {
     }
     final LocalBinder binder = new LocalBinder();
     MainActivity screen;
+    float micLevel;
+    long levelAt, studioRetryAfter;
+    boolean renderingVoice;
+    int speechGeneration;
+    android.media.MediaPlayer studioPlayer;
+    File studioFile;
+    boolean speakingNow() {
+        return studioPlayer != null || (voiceReady && voice != null && voice.isSpeaking());
+    }
+    void stopStudio() {
+        speechGeneration++;
+        renderingVoice = false;
+        if(studioPlayer!=null) { studioPlayer.release(); studioPlayer=null; }
+        if(studioFile!=null) { studioFile.delete(); studioFile=null; }
+    }
     String lastReply = "";
     void reply(String text) {
         lastReply = text;
@@ -74,6 +89,7 @@ public class JarvisService extends Service {
         return START_NOT_STICKY;
     }
     void standby() {
+        stopStudio();
         releaseListeningLock();
         active = awake = listening = false;
         handler.removeCallbacksAndMessages(null);
@@ -148,7 +164,10 @@ public class JarvisService extends Service {
 
                 public void onReadyForSpeech(Bundle b) {}
                 public void onBeginningOfSpeech() {}
-                public void onRmsChanged(float f) {}
+                public void onRmsChanged(float db) {
+                    micLevel=Math.max(0f,Math.min(1f,(db+2f)/12f));
+                    levelAt=SystemClock.uptimeMillis();
+                }
                 public void onBufferReceived(byte[] b) {}
                 public void onEndOfSpeech() {}
                 public void onPartialResults(Bundle b) {}
@@ -229,7 +248,7 @@ public class JarvisService extends Service {
         if (!active || busy ||
             listening || mic == null) return;
 
-        if (voiceReady && voice.isSpeaking()) {
+        if (renderingVoice || speakingNow()) {
 
             handler.postDelayed(
                 () -> listenNow(), 800);
@@ -265,6 +284,46 @@ public class JarvisService extends Service {
 
         status(text);
 
+        stopStudio();
+        if (voiceReady) voice.stop();
+        if (listening && mic != null) {
+            listening=false;
+            mic.cancel();
+            handler.removeCallbacks(recognizerTimeout);
+        }
+        android.content.SharedPreferences prefs=getSharedPreferences("MainActivity",MODE_PRIVATE);
+        String key=prefs.getString("key","");
+        if (prefs.getBoolean("studio_voice",true) && !key.isEmpty() && SystemClock.uptimeMillis()>=studioRetryAfter) {
+            renderingVoice=true;
+            int ticket=speechGeneration;
+            new Thread(()->{
+                try {
+                    File file=StudioVoice.render(this,key,text);
+                    handler.post(()->{
+                        if (ticket!=speechGeneration || destroyed) { file.delete(); return; }
+                        try {
+                            studioFile=file; studioPlayer=new android.media.MediaPlayer();
+                            studioPlayer.setDataSource(file.getAbsolutePath());
+                            studioPlayer.setOnCompletionListener(player->{ stopStudio(); listenNow(); });
+                            studioPlayer.setOnErrorListener((player,what,extra)->{ stopStudio(); speakLocal(text); return true; });
+                            studioPlayer.setOnPreparedListener(player->{ renderingVoice=false; player.start(); });
+                            studioPlayer.prepareAsync();
+                        } catch(Exception e) { stopStudio(); speakLocal(text); }
+                    });
+                } catch(Exception e) {
+                    handler.post(()->{
+                        if(ticket!=speechGeneration || destroyed) return;
+                        renderingVoice=false;
+                        studioRetryAfter=SystemClock.uptimeMillis()+60000;
+                        speakLocal(text);
+                    });
+                }
+            }).start();
+            return;
+        }
+        speakLocal(text);
+    }
+    void speakLocal(String text) {
         if (voiceReady && voice != null) {
             int lang = getSharedPreferences("MainActivity", MODE_PRIVATE).getInt("language",0);
             voice.setLanguage(lang == 0 ? Locale.UK : new Locale(lang == 1 ? "hi" : "mr", "IN"));
@@ -287,6 +346,15 @@ public class JarvisService extends Service {
         }
 
         String q = text.trim().toLowerCase(Locale.ROOT).replaceAll("[?!.।]+$", "");
+        if (q.matches("(?:(?:open|show) )?jarvis settings|जार्विस सेटिंग्स उघड|जार्विस सेटिंग्स खोलो")) {
+            if(screen!=null && screen.hasWindowFocus()) screen.showSettings(true);
+            speak("Jarvis settings."); return;
+        }
+        if (q.matches("show (?:the )?orb|voice mode|ऑर्ब दाखव|ऑर्ब दिखाओ")) {
+            if(screen!=null) screen.showSettings(false);
+            speak("At your service."); return;
+        }
+        if (q.equals("stop listening") || q.equals("ऐकणे थांबव") || q.equals("सुनना बंद करो")) { standby(); return; }
         switch (q) {
             case "आवाज वाढव": case "आवाज बढ़ाओ": case "आवाज़ बढ़ाओ": case "aawaz vadhav": q = "volume up"; break;
             case "आवाज कमी कर": case "आवाज कम करो": case "आवाज़ कम करो": case "aawaz kami kar": q = "volume down"; break;
@@ -534,6 +602,7 @@ public class JarvisService extends Service {
     }
 
     @Override public void onDestroy() {
+        stopStudio();
         releaseListeningLock();
         destroyed = true;
         active = false;
