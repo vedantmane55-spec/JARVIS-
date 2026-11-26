@@ -1,6 +1,11 @@
 name: VyaparMitra Windows build
 on:
   workflow_dispatch:
+  push:
+    branches: [vyaparmitra-pro]
+    paths:
+      - 'vyaparmitra/desktop/**'
+      - '.github/workflows/vyaparmitra-build.yml'
 jobs:
   build:
     runs-on: windows-latest
