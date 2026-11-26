@@ -1,0 +1,4 @@
+const {app,BrowserWindow}=require('electron');
+const path=require('node:path');
+function open(){const w=new BrowserWindow({width:1200,height:850,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});w.webContents.setWindowOpenHandler(()=>({action:'deny'}));w.webContents.on('will-navigate',(e,url)=>{if(url!==w.webContents.getURL())e.preventDefault()});w.loadFile(path.join(__dirname,'index.html'));}
+app.whenReady().then(()=>{open();app.on('activate',()=>{if(!BrowserWindow.getAllWindows().length)open()})});app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});
