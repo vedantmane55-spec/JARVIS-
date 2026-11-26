@@ -17,7 +17,8 @@
     </queries>
 
     <application
-        android:label="JARVIS"
+        android:label="JARVIS 2.0"
+        android:icon="@drawable/jarvis_icon"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:allowBackup="false">
 
