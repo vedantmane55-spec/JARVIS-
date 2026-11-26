@@ -19,18 +19,25 @@ public class MainActivity extends Activity {
 
     TextView status;
     EditText input, api;
-    SpeechRecognizer mic;
-    TextToSpeech voice;
-    Handler handler = new Handler();
-
-    boolean active = false;
-    boolean awake = false;
-    boolean busy = false;
-    boolean voiceReady = false;
-    boolean listening = false;
-
-    JSONArray history = new JSONArray();
-
+    JarvisService service;
+    Button send, stop, clear;
+    android.content.ServiceConnection connection = new android.content.ServiceConnection() {
+        public void onServiceConnected(android.content.ComponentName name, android.os.IBinder binder) {
+            service = ((JarvisService.LocalBinder) binder).service();
+            service.screen = MainActivity.this;
+            status.setText(service.statusText);
+            enableCommands(true);
+        }
+        public void onServiceDisconnected(android.content.ComponentName name) {
+            service = null;
+            enableCommands(false);
+        }
+    };
+    void enableCommands(boolean enabled) {
+        send.setEnabled(enabled);
+        stop.setEnabled(enabled);
+        clear.setEnabled(enabled);
+    }
     @Override
     public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -44,7 +51,7 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.rgb(3, 12, 24));
 
         TextView title = new TextView(this);
-        title.setText("J A R V I S  /  2.0");
+        title.setText("J A R V I S  /  3.0");
         title.setTextSize(36);
         title.setTextColor(Color.CYAN);
         layout.addView(title);
@@ -97,14 +104,14 @@ public class MainActivity extends Activity {
             public void onNothingSelected(android.widget.AdapterView<?> parent) {}
         });
         layout.addView(language);
-        Button send = new Button(this);
+        send = new Button(this);
         send.setText("SEND");
         layout.addView(send);
 
         send.setOnClickListener(v -> {
             String text = input.getText().toString();
             input.setText("");
-            command(text);
+            service.command(text);
         });
 
         Button start = new Button(this);
@@ -125,58 +132,21 @@ public class MainActivity extends Activity {
             }
         });
 
-        Button stop = new Button(this);
+        stop = new Button(this);
         stop.setText("STOP LISTENING");
         layout.addView(stop);
 
-        stop.setOnClickListener(v -> {
-            active = false;
-            awake = false;
-            listening = false;
+        stop.setOnClickListener(v -> service.standby());
 
-            if (mic != null) mic.cancel();
-
-            status.setText("STANDBY");
-        });
-
-        Button clear = new Button(this);
+        clear = new Button(this);
         clear.setText("CLEAR MEMORY");
         layout.addView(clear);
 
-        clear.setOnClickListener(v -> {
-            if (!busy) {
-                history = new JSONArray();
-                getPreferences(0).edit()
-                    .remove("history").apply();
-                speak("Memory cleared, sir.");
-            }
-        });
-
+        clear.setOnClickListener(v -> service.command("clear memory"));
+        enableCommands(false);
         scroll.addView(layout);
         setContentView(scroll);
-
-        try {
-            voice = new TextToSpeech(this, result -> {
-                handler.post(() -> {
-                    if (result == TextToSpeech.SUCCESS
-                        && voice != null) {
-
-                        voice.setLanguage(Locale.UK);
-                        voice.setPitch(0.78f);
-                        voice.setSpeechRate(0.9f);
-                        voiceReady = true;
-                    }
-                });
-            });
-        } catch (Exception e) {
-            status.setText("Voice unavailable");
-        }
-
-        try {
-            history = new JSONArray(
-                getPreferences(0)
-                .getString("history", "[]"));
-        } catch (Exception e) {}
+        bindService(new Intent(this, JarvisService.class), connection, BIND_AUTO_CREATE);
     }
 
     class Reactor extends View {
@@ -192,6 +162,8 @@ public class MainActivity extends Activity {
         protected void onDraw(Canvas c) {
             super.onDraw(c);
 
+            boolean busy = service != null && service.busy;
+            boolean awake = service != null && service.awake;
             float x = getWidth() / 2f;
             float y = getHeight() / 2f;
             float r = Math.min(x, y) * 0.8f;
@@ -222,357 +194,9 @@ public class MainActivity extends Activity {
     }
 
     void activate() {
-
-        if (!SpeechRecognizer
-            .isRecognitionAvailable(this)) {
-
-            status.setText(
-                "Speech recognition unavailable");
-            return;
-        }
-
-        active = true;
-
-        if (mic == null) {
-
-            mic = SpeechRecognizer
-                .createSpeechRecognizer(this);
-
-            mic.setRecognitionListener(
-                new RecognitionListener() {
-
-                public void onReadyForSpeech(Bundle b) {}
-                public void onBeginningOfSpeech() {}
-                public void onRmsChanged(float f) {}
-                public void onBufferReceived(byte[] b) {}
-                public void onEndOfSpeech() {}
-                public void onPartialResults(Bundle b) {}
-                public void onEvent(int i, Bundle b) {}
-
-                public void onError(int error) {
-
-                    listening = false;
-
-                    if (error ==
-                        SpeechRecognizer
-                        .ERROR_INSUFFICIENT_PERMISSIONS) {
-
-                        active = false;
-                        status.setText(
-                            "Microphone permission required");
-
-                    } else {
-                        handler.postDelayed(
-                            () -> listenNow(), 1800);
-                    }
-                }
-
-                public void onResults(Bundle b) {
-
-                    listening = false;
-
-                    if (!active) return;
-
-                    ArrayList<String> results =
-                        b.getStringArrayList(
-                            SpeechRecognizer
-                            .RESULTS_RECOGNITION);
-
-                    if (results == null ||
-                        results.isEmpty()) {
-
-                        listenNow();
-                        return;
-                    }
-
-                    String text = results.get(0);
-
-                    String lower =
-                        text.toLowerCase(Locale.ROOT);
-
-                    if (lower.contains("hey jarvis") || lower.contains("हे जार्विस") || lower.contains("हे जारविस")) {
-
-                        awake = true;
-
-                        String rest = lower.contains("hey jarvis") ? text.substring(lower.indexOf("hey jarvis") + 10).trim() : "";
-
-                        if (rest.isEmpty()) {
-                            speak("Yes sir, how can I help?");
-                        } else {
-                            command(rest);
-                        }
-
-                    } else if (awake) {
-
-                        command(text);
-
-                    } else {
-
-                        listenNow();
-                    }
-                }
-            });
-        }
-
-        listenNow();
-    }
-
-    void listenNow() {
-
-        if (!active || busy ||
-            listening || mic == null) return;
-
-        if (voiceReady && voice.isSpeaking()) {
-
-            handler.postDelayed(
-                () -> listenNow(), 800);
-            return;
-        }
-
-        Intent i = new Intent(
-            RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-
-        i.putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-
-        i.putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE, new String[]{"en-IN","hi-IN","mr-IN"}[getPreferences(0).getInt("language",0)]);
-
-        status.setText(
-            awake ? "LISTENING..." : "SAY HEY JARVIS");
-
-        try {
-            listening = true;
-            mic.startListening(i);
-        } catch (Exception e) {
-            listening = false;
-            status.setText(e.toString());
-        }
-    }
-
-    void speak(String text) {
-
-        status.setText(text);
-
-        if (voiceReady && voice != null) {
-            int lang = getPreferences(0).getInt("language",0);
-            voice.setLanguage(lang == 0 ? Locale.UK : new Locale(lang == 1 ? "hi" : "mr", "IN"));
-            voice.speak(text,
-                TextToSpeech.QUEUE_FLUSH,
-                null, "jarvis");
-        }
-
-        handler.postDelayed(
-            () -> listenNow(), 1200);
-    }
-
-    void command(String text) {
-
-        if (text.trim().isEmpty() || busy) return;
-
-        if (mic != null && listening) {
-            mic.cancel();
-            listening = false;
-        }
-
-        String q = text.toLowerCase(Locale.ROOT);
-
-        if (q.contains("go to sleep")) {
-            awake = false;
-            speak("Standing by, sir.");
-            return;
-        }
-
-        if (q.equals("open settings")) {
-            try { startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS)); speak("Opening settings, sir."); } catch (Exception e) { speak("Settings unavailable."); }
-            return;
-        }
-        if (q.equals("volume up") || q.equals("volume down")) {
-            android.media.AudioManager audio = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
-            audio.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, q.equals("volume up") ? 1 : -1, android.media.AudioManager.FLAG_SHOW_UI);
-            speak("Volume adjusted, sir."); return;
-        }
-        if (q.equals("battery status")) {
-            android.os.BatteryManager battery = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
-            speak("Battery is at " + battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) + " percent, sir."); return;
-        }
-        if (q.contains("what time")) {
-            speak(new java.text.SimpleDateFormat(
-                "hh:mm a", Locale.UK)
-                .format(new Date()));
-            return;
-        }
-
-        if (q.contains("clear memory")) {
-            history = new JSONArray();
-            getPreferences(0).edit()
-                .remove("history").apply();
-            speak("Memory cleared, sir.");
-            return;
-        }
-
-        if (q.startsWith("open youtube")) {
-            openWebsite("https://youtube.com");
-            return;
-        }
-
-        if (q.startsWith("open google")) {
-            openWebsite("https://google.com");
-            return;
-        }
-
-        if (q.startsWith("open instagram")) {
-            openWebsite("https://instagram.com");
-            return;
-        }
-
-        String key = getPreferences(0)
-            .getString("key", "");
-
-        if (key.isEmpty()) {
-            speak("Please save your Gemini API key.");
-            return;
-        }
-
-        busy = true;
-        status.setText("PROCESSING...");
-
-        new Thread(() -> {
-
-            try {
-
-                JSONObject body = new JSONObject();
-
-                JSONArray messages =
-                    new JSONArray(history.toString());
-
-                messages.put(message("user", text));
-
-                body.put("contents", messages);
-
-                JSONObject instruction =
-                    new JSONObject();
-
-                instruction.put("parts",
-                    new JSONArray().put(
-                        new JSONObject().put("text",
-                        "You are JARVIS, a helpful AI "
-                        + "assistant. Reply briefly and "
-                        + "clearly. Address user as sir.")));
-
-                body.put(
-                    "system_instruction", instruction);
-
-                String answer = generate(key, body);
-
-                messages.put(
-                    message("model", answer));
-
-                while (messages.length() > 20) {
-                    messages.remove(0);
-                    messages.remove(0);
-                }
-
-                runOnUiThread(() -> {
-
-                    if (isDestroyed()) return;
-
-                    history = messages;
-
-                    getPreferences(0).edit()
-                        .putString("history",
-                            history.toString())
-                        .apply();
-
-                    busy = false;
-                    speak(answer);
-                });
-
-            } catch (Exception e) {
-
-                runOnUiThread(() -> {
-
-                    if (isDestroyed()) return;
-
-                    busy = false;
-                    speak("AI error: " + e.getMessage());
-                });
-            }
-
-        }).start();
-    }
-
-    JSONObject request(String key, String endpoint, JSONObject body) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/" + endpoint).openConnection();
-        try {
-            c.setRequestProperty("x-goog-api-key", key);
-            c.setConnectTimeout(15000); c.setReadTimeout(35000);
-            if (body != null) {
-                c.setRequestMethod("POST"); c.setRequestProperty("Content-Type", "application/json");
-                c.setDoOutput(true);
-                try (OutputStream out = c.getOutputStream()) { out.write(body.toString().getBytes("UTF-8")); }
-            }
-            int code = c.getResponseCode();
-            if (code != 200) throw new IOException("HTTP " + code);
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
-                StringBuilder buf = new StringBuilder(); String line;
-                while ((line = reader.readLine()) != null) buf.append(line);
-                return new JSONObject(buf.toString());
-            }
-        } finally { c.disconnect(); }
-    }
-    String generate(String key, JSONObject body) throws Exception {
-        ArrayList<String> models = new ArrayList<>();
-        String page = "";
-        do {
-            JSONObject list = request(key, "models?pageSize=100" + (page.isEmpty() ? "" : "&pageToken=" + URLEncoder.encode(page, "UTF-8")), null);
-            JSONArray items = list.optJSONArray("models");
-            if (items != null) for (int i=0; i<items.length(); i++) {
-                JSONObject m = items.getJSONObject(i); String name = m.optString("name");
-                if (!name.matches("models/gemini-[a-zA-Z0-9._-]+") || name.matches(".*(image|audio|tts|live|robotics|embedding|computer-use|deep-research).*")) continue;
-                JSONArray methods = m.optJSONArray("supportedGenerationMethods");
-                if (methods != null && methods.toString().contains("generateContent")) models.add(name);
-            }
-            page = list.optString("nextPageToken", "");
-        } while (!page.isEmpty());
-        Collections.sort(models, Comparator.comparingInt(m -> (m.contains("flash") ? 0 : 10) + (m.contains("preview") || m.contains("exp") ? 5 : 0) + (m.contains("lite") ? 0 : 1)));
-        Exception last = new IOException("No compatible Gemini model found"); int attempts = 0;
-        for (String model : models) {
-            if (++attempts > 6) break;
-            try {
-                JSONArray parts = request(key, model + ":generateContent", body).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts");
-                StringBuilder answer = new StringBuilder();
-                for (int i=0; i<parts.length(); i++) { JSONObject p = parts.getJSONObject(i); if (!p.optBoolean("thought")) answer.append(p.optString("text")); }
-                if (answer.length() == 0) throw new IOException("No text response");
-                return answer.toString();
-            } catch (Exception e) { last = e; if ("HTTP 401".equals(e.getMessage()) || "HTTP 403".equals(e.getMessage())) throw e; }
-        }
-        throw last;
-    }
-    void openWebsite(String url) {
-
-        try {
-
-            startActivity(new Intent(
-                Intent.ACTION_VIEW,
-                android.net.Uri.parse(url)));
-
-            speak("Opening, sir.");
-
-        } catch (Exception e) {
-
-            speak("Unable to open website.");
-        }
-    }
-
-    JSONObject message(String role, String text)
-        throws JSONException {
-
-        return new JSONObject()
-            .put("role", role)
-            .put("parts", new JSONArray().put(
-                new JSONObject().put("text", text)));
+        Intent intent = new Intent(this, JarvisService.class);
+        if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+        else startService(intent);
     }
 
     @Override
@@ -591,27 +215,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override
-    protected void onPause() {
-
-        active = false;
-        listening = false;
-
-        if (mic != null) mic.cancel();
-
-        super.onPause();
-    }
-
-    @Override
-    protected void onDestroy() {
-
-        active = false;
-
-        handler.removeCallbacksAndMessages(null);
-
-        if (mic != null) mic.destroy();
-        if (voice != null) voice.shutdown();
-
+    @Override protected void onDestroy() {
+        if (service != null && service.screen == this) service.screen = null;
+        unbindService(connection);
         super.onDestroy();
     }
 }

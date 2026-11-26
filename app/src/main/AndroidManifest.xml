@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <uses-permission android:name="android.permission.FLASHLIGHT"/>
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService"/>
@@ -17,10 +20,12 @@
     </queries>
 
     <application
-        android:label="JARVIS 2.0"
+        android:label="JARVIS 3.0"
         android:icon="@drawable/jarvis_icon"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:allowBackup="false">
+
+        <service android:name=".JarvisService" android:exported="false" android:foregroundServiceType="microphone"/>
 
         <activity
             android:name=".MainActivity"
