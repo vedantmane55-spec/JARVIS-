@@ -33,12 +33,13 @@ public class JarvisService extends Service {
     String statusText = "SYSTEM ONLINE";
     boolean destroyed, executing;
     PowerManager.WakeLock listeningLock;
-    final Runnable recognizerTimeout = () -> {
+    final Runnable recognizerTimeout = this::recoverRecognizer;
+    void recoverRecognizer() {
         if (!active || !listening || mic == null) return;
         listening = false;
         mic.cancel();
         handler.postDelayed(this::listenNow,1000);
-    };
+    }
     void releaseListeningLock() {
         if (listeningLock != null && listeningLock.isHeld()) listeningLock.release();
     }
