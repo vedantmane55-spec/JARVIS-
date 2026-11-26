@@ -44,7 +44,7 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.rgb(3, 12, 24));
 
         TextView title = new TextView(this);
-        title.setText("J A R V I S");
+        title.setText("J A R V I S  /  2.0");
         title.setTextSize(36);
         title.setTextColor(Color.CYAN);
         layout.addView(title);
@@ -151,7 +151,7 @@ public class MainActivity extends Activity {
                         && voice != null) {
 
                         voice.setLanguage(Locale.UK);
-                        voice.setPitch(0.85f);
+                        voice.setPitch(0.78f);
                         voice.setSpeechRate(0.9f);
                         voiceReady = true;
                     }
@@ -185,7 +185,7 @@ public class MainActivity extends Activity {
             float y = getHeight() / 2f;
             float r = Math.min(x, y) * 0.8f;
 
-            p.setColor(Color.CYAN);
+            p.setColor(busy ? Color.rgb(255,65,65) : Color.CYAN);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(4);
 
@@ -203,7 +203,7 @@ public class MainActivity extends Activity {
             p.setStyle(Paint.Style.FILL);
             p.setTextSize(28);
             p.setTextAlign(Paint.Align.CENTER);
-            c.drawText("AI", x, y + 10, p);
+            c.drawText(busy ? "PROCESSING" : awake ? "ONLINE" : "STANDBY", x, y + 10, p);
 
             angle = (angle + 2) % 360;
             postInvalidateDelayed(40);
@@ -440,69 +440,7 @@ public class MainActivity extends Activity {
                 body.put(
                     "system_instruction", instruction);
 
-                URL url = new URL(
-                    "https://generativelanguage.googleapis.com/"
-                    + "v1beta/models/gemini-2.5-flash"
-                    + ":generateContent");
-
-                HttpURLConnection c =
-                    (HttpURLConnection)
-                    url.openConnection();
-
-                c.setRequestMethod("POST");
-
-                c.setRequestProperty(
-                    "Content-Type", "application/json");
-
-                c.setRequestProperty(
-                    "x-goog-api-key", key);
-
-                c.setConnectTimeout(20000);
-                c.setReadTimeout(30000);
-                c.setDoOutput(true);
-
-                try (OutputStream out =
-                    c.getOutputStream()) {
-
-                    out.write(
-                        body.toString().getBytes("UTF-8"));
-                }
-
-                int code = c.getResponseCode();
-
-                if (code != 200) {
-                    c.disconnect();
-                    throw new Exception(
-                        "Gemini HTTP " + code);
-                }
-
-                BufferedReader reader =
-                    new BufferedReader(
-                        new InputStreamReader(
-                            c.getInputStream()));
-
-                StringBuilder response =
-                    new StringBuilder();
-
-                String line;
-
-                while ((line = reader.readLine())
-                    != null) {
-
-                    response.append(line);
-                }
-
-                reader.close();
-                c.disconnect();
-
-                String answer =
-                    new JSONObject(response.toString())
-                    .getJSONArray("candidates")
-                    .getJSONObject(0)
-                    .getJSONObject("content")
-                    .getJSONArray("parts")
-                    .getJSONObject(0)
-                    .getString("text");
+                String answer = generate(key, body);
 
                 messages.put(
                     message("model", answer));
@@ -541,6 +479,53 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    JSONObject request(String key, String endpoint, JSONObject body) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/" + endpoint).openConnection();
+        try {
+            c.setRequestProperty("x-goog-api-key", key);
+            c.setConnectTimeout(15000); c.setReadTimeout(35000);
+            if (body != null) {
+                c.setRequestMethod("POST"); c.setRequestProperty("Content-Type", "application/json");
+                c.setDoOutput(true);
+                try (OutputStream out = c.getOutputStream()) { out.write(body.toString().getBytes("UTF-8")); }
+            }
+            int code = c.getResponseCode();
+            if (code != 200) throw new IOException("HTTP " + code);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                StringBuilder buf = new StringBuilder(); String line;
+                while ((line = reader.readLine()) != null) buf.append(line);
+                return new JSONObject(buf.toString());
+            }
+        } finally { c.disconnect(); }
+    }
+    String generate(String key, JSONObject body) throws Exception {
+        ArrayList<String> models = new ArrayList<>();
+        String page = "";
+        do {
+            JSONObject list = request(key, "models?pageSize=100" + (page.isEmpty() ? "" : "&pageToken=" + URLEncoder.encode(page, "UTF-8")), null);
+            JSONArray items = list.optJSONArray("models");
+            if (items != null) for (int i=0; i<items.length(); i++) {
+                JSONObject m = items.getJSONObject(i); String name = m.optString("name");
+                if (!name.matches("models/gemini-[a-zA-Z0-9._-]+") || name.matches(".*(image|audio|tts|live|robotics|embedding|computer-use|deep-research).*")) continue;
+                JSONArray methods = m.optJSONArray("supportedGenerationMethods");
+                if (methods != null && methods.toString().contains("generateContent")) models.add(name);
+            }
+            page = list.optString("nextPageToken", "");
+        } while (!page.isEmpty());
+        Collections.sort(models, Comparator.comparingInt(m -> (m.contains("flash") ? 0 : 10) + (m.contains("preview") || m.contains("exp") ? 5 : 0) + (m.contains("lite") ? 0 : 1)));
+        Exception last = new IOException("No compatible Gemini model found"); int attempts = 0;
+        for (String model : models) {
+            if (++attempts > 6) break;
+            try {
+                JSONArray parts = request(key, model + ":generateContent", body).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts");
+                StringBuilder answer = new StringBuilder();
+                for (int i=0; i<parts.length(); i++) { JSONObject p = parts.getJSONObject(i); if (!p.optBoolean("thought")) answer.append(p.optString("text")); }
+                if (answer.length() == 0) throw new IOException("No text response");
+                return answer.toString();
+            } catch (Exception e) { last = e; if ("HTTP 401".equals(e.getMessage()) || "HTTP 403".equals(e.getMessage())) throw e; }
+        }
+        throw last;
+    }
     void openWebsite(String url) {
 
         try {
