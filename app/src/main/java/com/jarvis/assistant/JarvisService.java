@@ -26,7 +26,8 @@ public class JarvisService extends Service {
     final LocalBinder binder = new LocalBinder();
     MainActivity screen;
     String statusText = "SYSTEM ONLINE";
-    boolean destroyed;
+    boolean destroyed, executing;
+    JSONArray plan = new JSONArray();
     void status(String text) {
         statusText = text;
         if (screen != null) screen.status.setText(text);
@@ -249,7 +250,7 @@ public class JarvisService extends Service {
 
     void command(String text) {
 
-        if (text.trim().isEmpty() || busy) return;
+        if (text.trim().isEmpty() || busy || executing) return;
 
         if (mic != null && listening) {
             mic.cancel();
@@ -294,7 +295,7 @@ public class JarvisService extends Service {
         if (q.contains("clear memory")) {
             history = new JSONArray();
             getSharedPreferences("MainActivity", MODE_PRIVATE).edit()
-                .remove("history").apply();
+                .remove("history").remove("notes").apply();
             speak("Memory cleared, sir.");
             return;
         }
@@ -314,6 +315,11 @@ public class JarvisService extends Service {
             return;
         }
 
+        ask(text,null);
+    }
+    void ask(String text,android.net.Uri image) {
+        if (busy || executing) return;
+        plan = new JSONArray();
         String key = getSharedPreferences("MainActivity", MODE_PRIVATE)
             .getString("key", "");
 
@@ -337,7 +343,11 @@ public class JarvisService extends Service {
 
                 messages.put(message("user", text));
 
-                body.put("contents", messages);
+                JSONArray requestMessages = new JSONArray(messages.toString());
+                if (image != null) requestMessages.getJSONObject(requestMessages.length()-1).getJSONArray("parts").put(
+                    new JSONObject().put("inline_data",new JSONObject().put("mime_type","image/jpeg").put("data",MainActivity.imageData(this,image))));
+                body.put("contents", requestMessages);
+                body.put("generationConfig",new JSONObject().put("responseMimeType","application/json"));
 
                 JSONObject instruction =
                     new JSONObject();
@@ -345,14 +355,19 @@ public class JarvisService extends Service {
                 instruction.put("parts",
                     new JSONArray().put(
                         new JSONObject().put("text",
-                        "You are JARVIS, a helpful AI "
+                        Tasks.RULES + Tasks.context(this) + " You are JARVIS, a helpful AI "
                         + "assistant. Reply briefly and "
                         + "clearly in " + replyLanguage + ". Address user as sir.")));
 
                 body.put(
                     "system_instruction", instruction);
 
-                String answer = generate(key, body);
+                JSONObject response = new JSONObject(generate(key, body));
+                String answer = response.getString("reply");
+                JSONArray proposed = response.optJSONArray("actions");
+                JSONArray steps = proposed == null || image != null ? new JSONArray() : proposed;
+                if (steps.length() > 8) throw new JSONException("Too many steps");
+                for (int i=0;i<steps.length();i++) Tasks.describe(steps.getJSONObject(i));
 
                 messages.put(
                     message("model", answer));
@@ -374,7 +389,12 @@ public class JarvisService extends Service {
                         .apply();
 
                     busy = false;
-                    speak(answer);
+                    plan = steps;
+                    if (steps.length() == 0) speak(answer);
+                    else {
+                        speak("Open Jarvis to review " + steps.length() + " proposed steps.");
+                        if (screen != null && screen.hasWindowFocus()) screen.showPlan();
+                    }
                 });
 
             } catch (Exception e) {

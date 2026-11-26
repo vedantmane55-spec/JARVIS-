@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
 
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService"/>
@@ -20,11 +23,14 @@
     </queries>
 
     <application
-        android:label="JARVIS 3.0"
+        android:label="JARVIS 3.1"
         android:icon="@drawable/jarvis_icon"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:allowBackup="false">
 
+        <receiver android:name=".Reminder" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+        </receiver>
         <service android:name=".JarvisService" android:exported="false" android:foregroundServiceType="microphone"/>
 
         <activity

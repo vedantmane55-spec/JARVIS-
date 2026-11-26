@@ -21,6 +21,100 @@ public class MainActivity extends Activity {
     EditText input, api;
     JarvisService service;
     Button send, stop, clear;
+    android.net.Uri picture;
+    boolean reviewing;
+    void button(LinearLayout layout, String label, Runnable action) {
+        Button b = new Button(this); b.setText(label); layout.addView(b);
+        b.setOnClickListener(v -> action.run());
+    }
+    void choose(String mime, int code) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime);
+        startActivityForResult(i,code);
+    }
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request,result,data);
+        if (result != RESULT_OK || data == null) return;
+        if (request == 23 && data.getExtras() != null && data.getExtras().get("data") instanceof Bitmap) {
+            try {
+                File photo = File.createTempFile("diagram-", ".jpg", getCacheDir());
+                try (OutputStream out = new FileOutputStream(photo)) {
+                    ((Bitmap)data.getExtras().get("data")).compress(Bitmap.CompressFormat.JPEG,95,out);
+                }
+                picture = android.net.Uri.fromFile(photo);
+                send.setText("SEND IMAGE TO GEMINI");
+                status.setText("Camera preview attached. For small labels attach a full-size photo.");
+            } catch (IOException e) { status.setText("Unable to attach photo"); }
+            return;
+        }
+        if (data.getData() == null) return;
+        try {
+            if (request == 21) Tasks.importPdf(this,data.getData());
+            if (request == 22) {
+                picture = data.getData();
+                status.setText("Image attached. Type your question and tap Send to Gemini.");
+                send.setText("SEND IMAGE TO GEMINI");
+            }
+        } catch (Exception e) { status.setText("Could not open the selected file"); }
+    }
+    static String imageData(android.content.Context ctx, android.net.Uri uri) throws Exception {
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) { BitmapFactory.decodeStream(in,null,opts); }
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) throw new IOException("Unsupported image");
+        opts.inSampleSize = 1;
+        while (Math.max(opts.outWidth,opts.outHeight) / opts.inSampleSize > 1600) opts.inSampleSize *= 2;
+        opts.inJustDecodeBounds = false;
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            Bitmap bitmap = BitmapFactory.decodeStream(in,null,opts);
+            if (bitmap == null) throw new IOException("Could not read image");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try { bitmap.compress(Bitmap.CompressFormat.JPEG,85,bytes); } finally { bitmap.recycle(); }
+            return android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP);
+        }
+    }
+    void showPlan() {
+        if (reviewing || service == null || service.plan.length() == 0) return;
+        JarvisService owner = service;
+        JSONArray steps = owner.plan;
+        StringBuilder summary = new StringBuilder();
+        try {
+            for (int i=0;i<steps.length();i++) summary.append(i+1).append(". ").append(Tasks.describe(steps.getJSONObject(i))).append("\n");
+        } catch(Exception e) { owner.plan = new JSONArray(); status.setText(e.getMessage()); return; }
+        reviewing = true;
+        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this).setTitle("Run these steps?")
+            .setMessage(summary.toString()).setPositiveButton("Run",(d,w)->runStep(owner,steps))
+            .setNegativeButton("Discard",(d,w)->owner.plan = new JSONArray()).create();
+        dialog.setOnDismissListener(d -> reviewing = false); dialog.show();
+    }
+    void runStep(JarvisService owner, JSONArray steps) {
+        if (owner.plan != steps || steps.length() == 0 || isDestroyed() || owner.executing) return;
+        JSONObject step = steps.optJSONObject(0);
+        try {
+            if ("device".equals(step.getString("type"))) {
+                owner.executing = true;
+                new Thread(()->{
+                    String failure = null;
+                    try { Tasks.device(owner,step.getString("value")); }
+                    catch(Exception e) { failure = "Device request failed. Check the routine before retrying."; }
+                    String error = failure;
+                    owner.handler.post(()->{
+                        owner.executing = false;
+                        if (error != null) { owner.plan = new JSONArray(); owner.speak(error); return; }
+                        steps.remove(0);
+                        if (steps.length()==0) owner.speak("Device request sent.");
+                        else if (hasWindowFocus()) runStep(owner,steps);
+                        else owner.status("Open Jarvis and tap Review steps to continue.");
+                    });
+                }).start(); return;
+            }
+            Tasks.execute(this,step);
+            steps.remove(0);
+            if (steps.length()==0) owner.speak("Requested steps sent.");
+            else if ("calendar".equals(step.optString("type")) || "pdf".equals(step.optString("type")) || "alarm".equals(step.optString("type")))
+                owner.status("Return to Jarvis and tap Review steps to continue.");
+            else runStep(owner,steps);
+        } catch(Exception e) { owner.plan = new JSONArray(); owner.speak("Stopped at " + step.optString("type") + ". " + e.getMessage()); }
+    }
     android.content.ServiceConnection connection = new android.content.ServiceConnection() {
         public void onServiceConnected(android.content.ComponentName name, android.os.IBinder binder) {
             service = ((JarvisService.LocalBinder) binder).service();
@@ -51,7 +145,7 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.rgb(3, 12, 24));
 
         TextView title = new TextView(this);
-        title.setText("J A R V I S  /  3.0");
+        title.setText("J A R V I S  /  3.1");
         title.setTextSize(36);
         title.setTextColor(Color.CYAN);
         layout.addView(title);
@@ -110,10 +204,25 @@ public class MainActivity extends Activity {
 
         send.setOnClickListener(v -> {
             String text = input.getText().toString();
+            if (service.busy || service.executing) return;
             input.setText("");
-            service.command(text);
+            if (picture == null) service.command(text);
+            else {
+                android.net.Uri selected = picture; picture = null; send.setText("SEND");
+                service.ask(text.trim().isEmpty() ? "Explain this image" : text, selected);
+            }
         });
 
+        button(layout,"Photograph a diagram",()->{
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) camera();
+            else requestPermissions(new String[]{android.Manifest.permission.CAMERA},4);
+        });
+        button(layout,"Attach diagram or screenshot",()->choose("image/*",22));
+        button(layout,"Save a PDF shortcut",()->choose("application/pdf",21));
+        button(layout,"Connect device routine",()->Tasks.configure(this));
+        button(layout,"Review steps",()->showPlan());
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            button(layout,"Enable reminder notifications",()->requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},3));
         Button start = new Button(this);
         start.setText("ACTIVATE JARVIS");
         layout.addView(start);
@@ -193,6 +302,10 @@ public class MainActivity extends Activity {
         }
     }
 
+    void camera() {
+        try { startActivityForResult(new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE),23); }
+        catch (android.content.ActivityNotFoundException e) { status.setText("Use Attach diagram to choose a photo."); }
+    }
     void activate() {
         Intent intent = new Intent(this, JarvisService.class);
         if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
@@ -207,6 +320,7 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(
             request, permissions, results);
 
+        if (request == 4 && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) camera();
         if (request == 1 && results.length > 0
             && results[0] ==
                 PackageManager.PERMISSION_GRANTED) {
