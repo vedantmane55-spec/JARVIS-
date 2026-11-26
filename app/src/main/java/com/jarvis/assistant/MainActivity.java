@@ -17,7 +17,7 @@ import org.json.*;
 
 public class MainActivity extends Activity {
 
-    TextView status;
+    TextView status, answer;
     EditText input, api;
     JarvisService service;
     Button send, stop, clear;
@@ -90,18 +90,22 @@ public class MainActivity extends Activity {
         if (owner.plan != steps || steps.length() == 0 || isDestroyed() || owner.executing) return;
         JSONObject step = steps.optJSONObject(0);
         try {
-            if ("device".equals(step.getString("type"))) {
+            if ("device".equals(step.getString("type")) || "home".equals(step.getString("type"))) {
                 owner.executing = true;
                 new Thread(()->{
                     String failure = null;
-                    try { Tasks.device(owner,step.getString("value")); }
+                    String result = "Device request sent.";
+                    try {
+                        if ("home".equals(step.getString("type"))) result = HomeHub.control(owner,step);
+                        else Tasks.device(owner,step.getString("value"));
+                    }
                     catch(Exception e) { failure = "Device request failed. Check the routine before retrying."; }
-                    String error = failure;
+                    String error = failure, feedback = result;
                     owner.handler.post(()->{
                         owner.executing = false;
                         if (error != null) { owner.plan = new JSONArray(); owner.speak(error); return; }
                         steps.remove(0);
-                        if (steps.length()==0) owner.speak("Device request sent.");
+                        if (steps.length()==0) owner.speak(feedback);
                         else if (hasWindowFocus()) runStep(owner,steps);
                         else owner.status("Open Jarvis and tap Review steps to continue.");
                     });
@@ -110,7 +114,7 @@ public class MainActivity extends Activity {
             Tasks.execute(this,step);
             steps.remove(0);
             if (steps.length()==0) owner.speak("Requested steps sent.");
-            else if ("calendar".equals(step.optString("type")) || "pdf".equals(step.optString("type")) || "alarm".equals(step.optString("type")))
+            else if ("whatsapp".equals(step.optString("type")) || "calendar".equals(step.optString("type")) || "pdf".equals(step.optString("type")) || "alarm".equals(step.optString("type")))
                 owner.status("Return to Jarvis and tap Review steps to continue.");
             else runStep(owner,steps);
         } catch(Exception e) { owner.plan = new JSONArray(); owner.speak("Stopped at " + step.optString("type") + ". " + e.getMessage()); }
@@ -120,6 +124,7 @@ public class MainActivity extends Activity {
             service = ((JarvisService.LocalBinder) binder).service();
             service.screen = MainActivity.this;
             status.setText(service.statusText);
+            answer.setText(service.lastReply);
             enableCommands(true);
         }
         public void onServiceDisconnected(android.content.ComponentName name) {
@@ -145,7 +150,7 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.rgb(3, 12, 24));
 
         TextView title = new TextView(this);
-        title.setText("J A R V I S  /  3.1");
+        title.setText("J A R V I S  /  3.2");
         title.setTextSize(36);
         title.setTextColor(Color.CYAN);
         layout.addView(title);
@@ -159,6 +164,7 @@ public class MainActivity extends Activity {
         status.setTextColor(Color.CYAN);
         status.setGravity(Gravity.CENTER);
         layout.addView(status);
+        answer = new TextView(this); answer.setTextIsSelectable(true); layout.addView(answer);
 
         api = new EditText(this);
         api.setHint("Gemini API Key");
@@ -219,6 +225,22 @@ public class MainActivity extends Activity {
         });
         button(layout,"Attach diagram or screenshot",()->choose("image/*",22));
         button(layout,"Save a PDF shortcut",()->choose("application/pdf",21));
+        button(layout,"Save WhatsApp contact",()->{
+            LinearLayout form = new LinearLayout(this); form.setOrientation(1);
+            EditText name = new EditText(this), phone = new EditText(this);
+            name.setHint("Name you will say"); phone.setHint("Number with country code, e.g. +91…");
+            phone.setInputType(android.text.InputType.TYPE_CLASS_PHONE); form.addView(name); form.addView(phone);
+            new android.app.AlertDialog.Builder(this).setTitle("WhatsApp contact").setView(form)
+                .setPositiveButton("Save",(d,w)->{
+                    String alias=name.getText().toString().trim().toLowerCase(Locale.ROOT);
+                    String digits=phone.getText().toString().replaceAll("[ ()-]","");
+                    if(alias.isEmpty() || !digits.matches("\\+[1-9][0-9]{6,14}")) { status.setText("Enter name and international number."); return; }
+                    try { Tasks.save(this,"wa_contacts",alias,digits.substring(1)); status.setText("Contact saved."); }
+                    catch(JSONException e) { status.setText("Unable to save contact."); }
+                }).setNegativeButton("Cancel",null).show();
+        });
+        button(layout,"Connect Home Assistant",()->HomeHub.configure(this));
+        button(layout,"Control lights and switches",()->HomeHub.select(this));
         button(layout,"Connect device routine",()->Tasks.configure(this));
         button(layout,"Review steps",()->showPlan());
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)

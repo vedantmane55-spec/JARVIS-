@@ -25,8 +25,23 @@ public class JarvisService extends Service {
     }
     final LocalBinder binder = new LocalBinder();
     MainActivity screen;
+    String lastReply = "";
+    void reply(String text) {
+        lastReply = text;
+        if (screen != null) screen.answer.setText(text);
+    }
     String statusText = "SYSTEM ONLINE";
     boolean destroyed, executing;
+    PowerManager.WakeLock listeningLock;
+    final Runnable recognizerTimeout = () -> {
+        if (!active || !listening || mic == null) return;
+        listening = false;
+        mic.cancel();
+        handler.postDelayed(this::listenNow,1000);
+    };
+    void releaseListeningLock() {
+        if (listeningLock != null && listeningLock.isHeld()) listeningLock.release();
+    }
     JSONArray plan = new JSONArray();
     void status(String text) {
         statusText = text;
@@ -49,13 +64,16 @@ public class JarvisService extends Service {
         }
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop = PendingIntent.getService(this, 1, new Intent(this, JarvisService.class).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent talk = PendingIntent.getService(this, 2, new Intent(this, JarvisService.class).setAction("TALK"), PendingIntent.FLAG_IMMUTABLE);
         startForeground(1, note.setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Jarvis microphone active").setContentText("Say Hey Jarvis")
-            .setOngoing(true).setContentIntent(open).addAction(0, "Stop", stop).build());
+            .setOngoing(true).setContentIntent(open).addAction(0,"Speak",talk).addAction(0, "Stop", stop).build());
+        if ("TALK".equals(intent.getAction())) awake = true;
         activate();
         return START_NOT_STICKY;
     }
     void standby() {
+        releaseListeningLock();
         active = awake = listening = false;
         handler.removeCallbacksAndMessages(null);
         if (mic != null) { mic.destroy(); mic = null; }
@@ -112,6 +130,11 @@ public class JarvisService extends Service {
             return;
         }
 
+        if (listeningLock == null) {
+            listeningLock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"Jarvis:Listening");
+            listeningLock.setReferenceCounted(false);
+        }
+        if (!listeningLock.isHeld()) listeningLock.acquire();
         active = true;
 
         if (mic == null) {
@@ -131,6 +154,7 @@ public class JarvisService extends Service {
                 public void onEvent(int i, Bundle b) {}
 
                 public void onError(int error) {
+                    handler.removeCallbacks(recognizerTimeout);
 
                     listening = false;
 
@@ -149,6 +173,7 @@ public class JarvisService extends Service {
                 }
 
                 public void onResults(Bundle b) {
+                    handler.removeCallbacks(recognizerTimeout);
 
                     listening = false;
 
@@ -226,9 +251,12 @@ public class JarvisService extends Service {
         try {
             listening = true;
             mic.startListening(i);
+            handler.removeCallbacks(recognizerTimeout);
+            handler.postDelayed(recognizerTimeout,60000);
         } catch (Exception e) {
             listening = false;
-            status(e.toString());
+            status("Retrying microphone");
+            handler.postDelayed(this::listenNow,1800);
         }
     }
 
@@ -389,6 +417,7 @@ public class JarvisService extends Service {
                         .apply();
 
                     busy = false;
+                    reply(answer);
                     plan = steps;
                     if (steps.length() == 0) speak(answer);
                     else {
@@ -404,7 +433,8 @@ public class JarvisService extends Service {
                     if (destroyed) return;
 
                     busy = false;
-                    speak("AI error: " + e.getMessage());
+                    reply("Gemini reply failed: " + e.getMessage());
+                    speak(lastReply);
                 });
             }
 
@@ -449,14 +479,28 @@ public class JarvisService extends Service {
         for (String model : models) {
             if (++attempts > 6) break;
             try {
-                JSONArray parts = request(key, model + ":generateContent", body).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts");
-                StringBuilder answer = new StringBuilder();
-                for (int i=0; i<parts.length(); i++) { JSONObject p = parts.getJSONObject(i); if (!p.optBoolean("thought")) answer.append(p.optString("text")); }
-                if (answer.length() == 0) throw new IOException("No text response");
-                return answer.toString();
+                return stream(key,model,body);
             } catch (Exception e) { last = e; if ("HTTP 401".equals(e.getMessage()) || "HTTP 403".equals(e.getMessage())) throw e; }
         }
         throw last;
+    }
+    String stream(String key,String model,JSONObject body) throws Exception {
+        HttpURLConnection c = (HttpURLConnection)new URL("https://generativelanguage.googleapis.com/v1beta/"+model+":streamGenerateContent?alt=sse").openConnection();
+        try {
+            c.setConnectTimeout(15000); c.setReadTimeout(45000);
+            c.setRequestMethod("POST"); c.setDoOutput(true);
+            c.setRequestProperty("Content-Type","application/json");
+            c.setRequestProperty("Accept","text/event-stream");
+            c.setRequestProperty("x-goog-api-key",key);
+            try(OutputStream out=c.getOutputStream()) { out.write(body.toString().getBytes("UTF-8")); }
+            int code=c.getResponseCode();
+            if(code!=200) throw new IOException("HTTP "+code);
+            try(BufferedReader reader=new BufferedReader(new InputStreamReader(c.getInputStream(),"UTF-8"))) {
+                return GeminiStream.read(reader,partial->handler.post(()->{
+                    if(!destroyed && busy) reply(partial);
+                }));
+            }
+        } finally { c.disconnect(); }
     }
     void openActivity(Intent intent) {
         if (screen == null || !screen.hasWindowFocus())
@@ -489,6 +533,7 @@ public class JarvisService extends Service {
     }
 
     @Override public void onDestroy() {
+        releaseListeningLock();
         destroyed = true;
         active = false;
         handler.removeCallbacksAndMessages(null);
