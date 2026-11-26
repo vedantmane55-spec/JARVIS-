@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     void showSettings(boolean show) {
         settings.setVisibility(show?View.VISIBLE:View.GONE);
         orb.setVisibility(show?View.GONE:View.VISIBLE);
-        if (!show) {
+        if (!show && stage.getWindowToken()!=null) {
             ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(stage.getWindowToken(),0);
         }
         getWindow().getDecorView().setSystemUiVisibility(show?View.SYSTEM_UI_FLAG_VISIBLE:
@@ -142,6 +142,7 @@ public class MainActivity extends Activity {
     }
     android.content.ServiceConnection connection = new android.content.ServiceConnection() {
         public void onServiceConnected(android.content.ComponentName name, android.os.IBinder binder) {
+            if (!(binder instanceof JarvisService.LocalBinder)) { enableCommands(false); return; }
             service = ((JarvisService.LocalBinder) binder).service();
             service.screen = MainActivity.this;
             status.setText(service.statusText);

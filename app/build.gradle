@@ -15,6 +15,7 @@ android {
     }
 
     testOptions.unitTests.includeAndroidResources = true
+    testOptions.unitTests.all { testLogging.exceptionFormat = "full" }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
