@@ -5,7 +5,7 @@ on:
     paths: ['index.html', 'android/**', '.github/workflows/vedyya-drop.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   android:
     runs-on: ubuntu-latest
@@ -22,3 +22,13 @@ jobs:
         with:
           name: Vedyya-Drop-Android
           path: dist/Vedyya-Drop.apk
+      - name: Publish downloadable test APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-test-${GITHUB_SHA:0:12}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/Vedyya-Drop.apk --clobber
+          else
+            gh release create "$tag" dist/Vedyya-Drop.apk --target "$GITHUB_SHA" --title "Vedyya Drop Android test build" --notes "Test-signed Android build for this revision." --prerelease
+          fi
