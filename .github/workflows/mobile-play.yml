@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --no-save --ignore-scripts playwright-core@1.55.0
+      - run: npm install --no-save --ignore-scripts playwright-core@1.55.0 peer@1.0.2 peerjs@1.5.5
       - run: node checks/mobile.mjs
       - name: Report result
         if: always()

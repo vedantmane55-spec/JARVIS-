@@ -1,12 +1,12 @@
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const tmp=mkdtempSync(join(tmpdir(),'drop-test-')),url='http://127.0.0.1:3000';
 const server=spawn(process.execPath,['server.mjs'],{env:{...process.env,DROP_DATABASE:join(tmp,'users.sqlite')},stdio:'inherit'});
-let browser;
+let browser,signals;
 try {
  for(let i=0;i<60;i++){try{if((await fetch(url)).ok)break}catch{}await new Promise(r=>setTimeout(r,250))}
  browser=await chromium.launch({channel:'chrome',args:['--no-sandbox','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
@@ -24,5 +24,23 @@ try {
  const second=await browser.newContext(device),q=await second.newPage();await q.goto(url);await q.locator('#name').fill('Guest');await q.getByRole('button',{name:'Enter lobby'}).tap();
  await q.getByRole('button',{name:'Account',exact:true}).tap();await q.locator('#userId').fill('radio_scout');await q.locator('#pass').fill('example-test-passphrase');await q.getByRole('button',{name:'Sign in',exact:true}).tap();await q.waitForFunction(()=>screen==='lobby'&&profile.wins===1);
  assert.match(await q.locator('#record').innerText(),/vedyya/i);assert.deepEqual(faults,[]);
+ signals=spawn(process.execPath,['--input-type=module','-e',"import {PeerServer} from 'peer';PeerServer({port:9100,path:'/drop',host:'127.0.0.1'});"],{stdio:'inherit'});for(let i=0;i<60;i++){try{await fetch('http://127.0.0.1:9100');break}catch{}await new Promise(r=>setTimeout(r,200))}
+ const peerScript=readFileSync('node_modules/peerjs/dist/peerjs.min.js','utf8');
+ for(const tab of [p,q]){
+   await tab.route('https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js',route=>route.fulfill({contentType:'application/javascript',body:peerScript+";window.Peer=class extends window.Peer{constructor(id){super(id,{host:'127.0.0.1',port:9100,path:'/drop',secure:false,config:{iceServers:[]}})}};"}));
+   await tab.context().grantPermissions(['microphone'],{origin:url});
+   await tab.getByRole('button',{name:'Online squad'}).tap();
+ }
+ await p.getByRole('button',{name:'Invite a friend'}).tap();
+ await p.waitForFunction(()=>document.querySelector('#desc').textContent.includes('Share this squad code'));
+ const code=(await p.locator('#desc').innerText()).split(': ').pop();
+ q.once('dialog',d=>d.accept(code));await q.getByRole('button',{name:'Join with code'}).tap();
+ await q.waitForFunction(()=>screen==='match'&&net.role==='guest');await p.waitForFunction(()=>screen==='match'&&net.role==='host');
+ await q.getByRole('button',{name:'Bag',exact:true}).tap();await q.getByRole('button',{name:'Crouch',exact:true}).tap();
+ await p.waitForFunction(()=>actors[1].kit.crouch);await q.waitForFunction(()=>player.kit.crouch);
+ await q.locator('#micBtn').tap();await p.waitForFunction(()=>net.audio?.srcObject?.getAudioTracks().length===1);
+ await q.locator('#micBtn').tap();await q.waitForFunction(()=>!net.stream);await q.evaluate(()=>leaveRoom());await p.waitForFunction(()=>screen==='room');
+ assert.deepEqual(faults,[]);
+ console.log('PASS: real WebRTC data channel, guest controls, host snapshots, received synthetic microphone track, mic off and clean disconnect over local signaling.');
  console.log('PASS: mobile browser drop, canvas, touch UI, camera, equipment, finish, cloud registration and cross-browser login with restored record.');
-} finally {if(browser)await browser.close();server.kill()}
+} finally {if(browser)await browser.close();server.kill();signals?.kill()}
