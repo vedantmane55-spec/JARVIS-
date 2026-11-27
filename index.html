@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#112d2a"><title>Vedyya Drop · Breakwater Island</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#143c41;color:#fff;font:16px "Arial",sans-serif;overflow:hidden}canvas,#veil{position:fixed;inset:0;width:100%;height:100%}canvas{touch-action:none}#veil{background:linear-gradient(90deg,#071a1df2,#071a1d96 45%,transparent 85%);display:flex;align-items:center;padding:clamp(18px,7vw,110px);overflow:auto}article{max-width:530px}.tag,.brand,.data{font:700 12px/1.5 monospace;letter-spacing:.13em;text-transform:uppercase}.brand{color:#c4ff68}.tag{color:#afd6c9;margin-top:3vh}h1{font-size:clamp(47px,10vw,138px);line-height:.83;letter-spacing:-.085em;margin:16px 0 22px;font-weight:950}h1 span{color:#c4ff68}p{line-height:1.5;color:#d3e7dc;max-width:35em}label{display:block;font-size:14px;margin:16px 0 6px}input,button{font:inherit;color:white}input{background:#132c30;border:1px solid #91aba1;padding:12px;width:min(100%,310px);border-radius:4px}button{cursor:pointer;background:#c4ff68;color:#14241e;font-weight:800;border:0;border-radius:4px;padding:13px 24px}button.secondary{background:#1a373b;color:white;border:1px solid #779c94}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.data{padding:10px 0;border-block:1px solid #749689;color:#e4f3e3}#hud{position:fixed;top:12px;left:12px;right:12px;display:flex;align-items:start;gap:8px;pointer-events:none}#stats,#pause{font:bold 14px monospace;color:white;background:#102725ee;padding:12px;border-radius:5px}#pause{margin-left:auto;pointer-events:auto}.controls{position:fixed;bottom:max(18px,env(safe-area-inset-bottom));left:16px;right:16px;display:flex;justify-content:space-between;align-items:end;pointer-events:none}.controls>*{pointer-events:auto;touch-action:none;user-select:none}.pad,#fire{width:88px;height:88px;border-radius:50%;background:#102c2aad;border:2px solid #eaf9dd8a;display:grid;place-items:center;color:white}.pad i{width:30px;height:30px;border-radius:50%;background:#ecffdeab}#fire{background:#c4ff68db;color:#14241e}#fire:active{background:white}[hidden]{display:none!important}@media(max-height:470px){#veil{align-items:safe center;padding:12px 6vw}.tag{margin:4px 0}h1{font-size:48px;margin:6px 0}p,label,.actions{margin:7px 0}.data{padding:4px 0}}
+</style>
+<canvas id="map" aria-label="Breakwater Island arena"></canvas>
+<div id="hud" hidden><div id="stats"></div><button id="pause">Pause</button></div>
+<div id="controls" class="controls" hidden><div class="pad" id="pad" aria-label="Movement joystick"><i></i></div><button id="fire">FIRE</button></div>
+<section id="veil"><article><div class="brand">VEDYYA / DROP</div><div class="tag" id="tag"></div><h1 id="title"></h1><p id="desc"></p><div class="data" id="record" hidden></div><form id="login" hidden><label for="name">Guest callsign</label><input id="name" maxlength="18" required placeholder="Your name" autocomplete="nickname"><div class="actions"><button>Enter lobby →</button></div></form><div class="actions" id="actions"></div></article></section>
+<script>
+'use strict';
+const $=id=>document.getElementById(id), canvas=$('map'),g=canvas.getContext('2d'), world=1200, center=600;
+let profile={name:'',wins:0,best:0},screen='guest',actors=[],shots=[],loot=[],age=0,frags=0,player=null,raf=0,last=0,stick={x:0,y:0},fire=false,keys=new Set(),pointer=null;
+try{Object.assign(profile,JSON.parse(localStorage.getItem('vedyya-drop-v1')))}catch{}
+function save(){try{localStorage.setItem('vedyya-drop-v1',JSON.stringify(profile))}catch{}}
+function page(state,tag,title,desc,actions=[]){
+ screen=state;$('veil').hidden=false;$('hud').hidden=$('controls').hidden=true;
+ $('tag').textContent=tag;$('title').innerHTML=title;$('desc').textContent=desc;
+ $('login').hidden=state!=='guest';$('record').hidden=state!=='lobby';
+ $('actions').replaceChildren(...actions.map(([label,fn],i)=>{const b=document.createElement('button');b.textContent=label;b.onclick=fn;if(i)b.className='secondary';return b}));
+}
+function guest(){page('guest','SOLO SURVIVAL','VEDYYA<br><span>DROP</span>','Choose a callsign to play on Breakwater Island. Your record stays on this device.')}
+function lobby(){player=null;draw();$('record').textContent=profile.name+'  /  '+profile.wins+' wins  /  best '+profile.best+' KOs';page('lobby','SOLO  /  BREAKWATER ISLAND','READY TO<br><span>DROP?</span>','Outlast 11 bots. Stay inside the white ring and collect green medkits. Drag the pad to move. Hold FIRE to aim at the nearest rival. On keyboard, use WASD or arrows and Space.',[['Start match →',start],['Edit callsign',()=>{$('name').value=profile.name;guest()}]])}
+$('login').onsubmit=e=>{e.preventDefault();const n=$('name').value.trim();if(!n){$('name').value='';$('name').reportValidity();return}profile.name=n;save();lobby()};
+const terrain=document.createElement('canvas');terrain.width=terrain.height=world;
+function paintTerrain(){
+ const c=terrain.getContext('2d');let seed=482;function rand(){seed=seed*16807%2147483647;return seed/2147483647}
+ c.fillStyle='#19535c';c.fillRect(0,0,world,world);
+ for(let i=0;i<2800;i++){const x=rand()*world,y=rand()*world;c.fillStyle=i%2?'#26646a':'#1f5b61';c.fillRect(x,y,4+rand()*22,2)}
+ function coast(radius,color){c.beginPath();for(let i=0;i<=180;i++){let a=i*Math.PI/90,r=radius+13*Math.sin(a*7)+9*Math.cos(a*11);c.lineTo(center+Math.cos(a)*r,center+Math.sin(a)*r)}c.closePath();c.fillStyle=color;c.fill()}
+ coast(552,'#468880');coast(540,'#b8b681');coast(527,'#718963');
+ c.save();c.clip();for(let i=0;i<450;i++){c.fillStyle=i%2?'#829367':'#667f5d';c.beginPath();c.ellipse(rand()*world,rand()*world,12+rand()*64,8+rand()*27,rand()*4,0,7);c.fill()}
+ c.strokeStyle='#aeaa83';c.lineWidth=20;c.beginPath();c.moveTo(110,690);c.bezierCurveTo(410,600,620,850,981,285);c.stroke();
+ for(let i=0;i<140;i++){let x=rand()*world,y=rand()*world;c.fillStyle='#456453';c.beginPath();c.arc(x+3,y+4,9,0,7);c.fill();c.fillStyle='#59795a';c.beginPath();c.arc(x,y,9,0,7);c.fill()}
+ for(const [x,y] of [[350,490],[750,530],[530,780],[485,285],[880,675]])for(let i=0;i<3;i++){c.save();c.translate(x+i*28,y+i%2*30);c.rotate(-.22);c.fillStyle='#53635c';c.fillRect(3,4,22,38);c.fillStyle='#b6b8a1';c.fillRect(0,0,22,38);c.fillStyle='#859389';c.fillRect(10,0,3,38);c.restore()}
+ c.restore()
+}
+paintTerrain();
+function actor(x,y){return {x,y,hp:100,cd:1,angle:0,phase:Math.random()*6}}
+function start(){age=frags=0;shots=[];loot=[];actors=[];const phase=Math.random()*6.28;
+ for(let i=0;i<12;i++){const a=phase+i*Math.PI/6;actors.push(actor(center+Math.cos(a)*350,center+Math.sin(a)*350))}
+ player=actors[0];for(let i=0;i<8;i++){const a=i*Math.PI/4,r=i%2?260:100;loot.push({x:center+r*Math.cos(a),y:center+r*Math.sin(a)})}resume()}
+function clearInput(){keys.clear();fire=false;stick={x:0,y:0};pointer=null;$('pad').firstElementChild.style.transform=''}
+function resume(){clearInput();screen='match';$('veil').hidden=true;$('hud').hidden=$('controls').hidden=false;last=performance.now();cancelAnimationFrame(raf);raf=requestAnimationFrame(loop)}
+function pause(){if(screen!=='match')return;cancelAnimationFrame(raf);clearInput();page('paused','MATCH PAUSED','HOLD<br><span>POSITION</span>','Your match will continue from here.',[['Resume →',resume],['Leave match',lobby]])}
+$('pause').onclick=pause;document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});window.addEventListener('blur',pause);
+function finish(win){const rank=win?1:actors.filter(a=>a.hp>0).length+1;profile.wins+=win?1:0;profile.best=Math.max(frags,profile.best);save();clearInput();page('result','BREAKWATER  /  FINAL PLACEMENT #'+rank,win?'ISLAND<br><span>CHAMPION</span>':'DROP<br><span>COMPLETE</span>',frags+' KOs · '+Math.floor(age)+' seconds survived.',[['Play again →',start],['Lobby',lobby]])}
+const ring=()=>Math.max(32,505-Math.max(0,age-8)*4.8);
+const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function nearest(a){let best=null,d=Infinity;for(const b of actors){if(a===b||b.hp<=0)continue;const n=distance(a,b);if(n<d){d=n;best=b}}return best}
+function move(a,x,y,dt,speed){const mag=Math.max(1,Math.hypot(x,y));a.x+=x/mag*dt*speed;a.y+=y/mag*dt*speed;const dx=a.x-center,dy=a.y-center,r=Math.hypot(dx,dy);if(r>505){a.x=center+dx/r*505;a.y=center+dy/r*505}}
+function tick(dt){age+=dt;const radius=ring();
+ for(const a of actors){if(a.hp<=0)continue;const b=nearest(a);a.cd-=dt;const isMe=a===player;let x=0,y=0;
+ if(isMe){x=stick.x+Number(keys.has('d')||keys.has('arrowright'))-Number(keys.has('a')||keys.has('arrowleft'));y=stick.y+Number(keys.has('s')||keys.has('arrowdown'))-Number(keys.has('w')||keys.has('arrowup'))}
+ else if(b){const angle=Math.atan2(b.y-a.y,b.x-a.x);if(Math.hypot(a.x-center,a.y-center)>radius-20){x=center-a.x;y=center-a.y}else{const offset=distance(a,b)<100?1.5*Math.sin(age*.6+a.phase):.3*Math.sin(age+a.phase);x=Math.cos(angle+offset);y=Math.sin(angle+offset)}}
+ move(a,x,y,dt,isMe?112:54);if(Math.hypot(a.x-center,a.y-center)>radius)a.hp=Math.max(0,a.hp-dt*9);
+ if(a.hp<=0)continue;
+ if(b){a.angle=Math.atan2(b.y-a.y,b.x-a.x);if(a.cd<=0&&distance(a,b)<(isMe?265:210)&&(isMe?(fire||keys.has(' ')):true)){let aim=a.angle+(isMe?0:(Math.random()-.5)*.22);shots.push({x:a.x,y:a.y,vx:Math.cos(aim)*405,vy:Math.sin(aim)*405,ttl:.72,owner:a});a.cd=isMe?.23:.85+Math.random()*.55}}
+ if(a.hp<85){const i=loot.findIndex(p=>distance(a,p)<17);if(i>=0){a.hp=Math.min(100,a.hp+38);loot.splice(i,1)}}
+ }
+ for(const s of shots){s.x+=s.vx*dt;s.y+=s.vy*dt;s.ttl-=dt;const hit=actors.find(a=>a!==s.owner&&a.hp>0&&distance(s,a)<11);if(hit){hit.hp=Math.max(0,hit.hp-(s.owner===player?29:16));s.ttl=0;if(!hit.hp&&s.owner===player)frags++}}
+ shots=shots.filter(s=>s.ttl>0);const alive=actors.filter(a=>a.hp>0).length;$('stats').textContent='HP '+Math.ceil(player.hp)+'  ·  '+alive+' alive  ·  '+frags+' KOs';if(player.hp<=0||alive===1)finish(player.hp>0)
+}
+function draw(){const w=innerWidth,h=innerHeight,d=Math.min(devicePixelRatio,2);if(canvas.width!==Math.round(w*d)||canvas.height!==Math.round(h*d)){canvas.width=Math.round(w*d);canvas.height=Math.round(h*d)}
+ g.setTransform(d,0,0,d,0,0);g.fillStyle='#19535c';g.fillRect(0,0,w,h);
+ const scale=player?Math.min(w,h)/480:Math.max(w,h)/1170;g.save();g.translate(player?w/2:w*.57,h/2);g.scale(scale,scale);g.translate(-(player?.x??600),-(player?.y??600));g.drawImage(terrain,0,0);
+ if(player){g.fillStyle='#63274b50';g.beginPath();g.rect(-4000,-4000,9000,9000);g.arc(center,center,ring(),0,Math.PI*2,true);g.fill('evenodd');g.strokeStyle='#f1ffe0';g.lineWidth=2;g.beginPath();g.arc(center,center,ring(),0,7);g.stroke();
+ for(const p of loot){g.fillStyle='#165b42';g.fillRect(p.x-7,p.y-7,14,14);g.fillStyle='#ceff89';g.fillRect(p.x-1,p.y-5,3,10);g.fillRect(p.x-5,p.y-1,10,3)}
+ for(const a of actors.filter(a=>a.hp>0)){g.save();g.translate(a.x,a.y);g.rotate(a.angle);g.fillStyle=a===player?'#c4ff68':'#ff8463';g.strokeStyle='#193739';g.lineWidth=2;g.beginPath();g.arc(0,0,9,0,7);g.fill();g.stroke();g.fillStyle='#24393c';g.fillRect(4,-2,10,4);g.restore();g.fillStyle='#263f3d';g.fillRect(a.x-10,a.y-15,20,2);g.fillStyle='#deff99';g.fillRect(a.x-10,a.y-15,a.hp/5,2)}
+ for(const s of shots){g.fillStyle='#fff8c1';g.beginPath();g.arc(s.x,s.y,2.5,0,7);g.fill()}}
+ g.restore();
+ if(player){const size=76,x=w-size-12,y=64,k=size/world;g.fillStyle='#122c30';g.fillRect(x-2,y-2,size+4,size+4);g.drawImage(terrain,x,y,size,size);g.beginPath();g.strokeStyle='white';g.lineWidth=1;g.arc(x+600*k,y+600*k,ring()*k,0,7);g.stroke();g.fillStyle='#d7ff45';g.beginPath();g.arc(x+player.x*k,y+player.y*k,3,0,7);g.fill()}
+}
+function loop(now){if(screen!=='match')return;tick(Math.min(.035,(now-last)/1000));last=now;draw();if(screen==='match')raf=requestAnimationFrame(loop)}
+window.addEventListener('resize',draw);window.addEventListener('keydown',e=>{if(screen!=='match')return;if(e.key==='Escape'){pause();return}const k=e.key.toLowerCase();if([' ','arrowup','arrowdown','arrowleft','arrowright','w','a','s','d'].includes(k)){e.preventDefault();keys.add(k)}});window.addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+const pad=$('pad');function steer(e){if(pointer!==e.pointerId)return;const r=pad.getBoundingClientRect(),x=(e.clientX-r.left-r.width/2)/32,y=(e.clientY-r.top-r.height/2)/32,m=Math.max(1,Math.hypot(x,y));stick={x:x/m,y:y/m};pad.firstElementChild.style.transform='translate('+stick.x*23+'px,'+stick.y*23+'px)'}
+pad.onpointerdown=e=>{pointer=e.pointerId;pad.setPointerCapture(pointer);steer(e)};pad.onpointermove=steer;pad.onlostpointercapture=()=>{stick={x:0,y:0};pointer=null;pad.firstElementChild.style.transform=''};
+$('fire').onpointerdown=e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);fire=true};$('fire').onlostpointercapture=()=>fire=false;
+draw();if(profile.name)lobby();else guest();
+</script></html>
