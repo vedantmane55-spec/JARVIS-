@@ -1,0 +1,56 @@
+name: Android 10 launch check
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/android-device.yml', 'android/**', 'index.html']
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Report start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=pending -f context=android-device -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: bash android/build.sh
+      - name: Install emulator image
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "system-images;android-29;google_apis;x86_64"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -f -n drop -k "system-images;android-29;google_apis;x86_64"
+      - name: Launch game and inspect its UI on Android 10
+        timeout-minutes: 7
+        run: |
+          sudo chmod 666 /dev/kvm
+          "$ANDROID_HOME/emulator/emulator" -avd drop -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -no-boot-anim > /tmp/drop-emulator.log 2>&1 &
+          adb wait-for-device
+          until adb shell getprop sys.boot_completed | tr -d '\r' | grep -qx 1; do sleep 2; done
+          adb shell input keyevent 82
+          adb install dist/Vedyya-Drop.apk
+          adb shell am start -n game.vedyya.drop/.DropActivity
+          for attempt in $(seq 1 15); do
+            sleep 2
+            adb shell uiautomator dump /sdcard/window.xml >/dev/null || continue
+            adb shell cat /sdcard/window.xml > /tmp/drop-ui.xml
+            if grep -qi 'Guest callsign' /tmp/drop-ui.xml; then echo "Game login screen confirmed on Android 10"; exit 0; fi
+          done
+          adb logcat -d -s chromium AndroidRuntime
+          cat /tmp/drop-ui.xml
+          exit 1
+      - name: Report result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ job.status }}
+        run: |
+          state=failure
+          if [[ "$RESULT" == success ]]; then state=success; fi
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state="$state" -f context=android-device -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
