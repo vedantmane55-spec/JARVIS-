@@ -25,13 +25,17 @@ jobs:
       - name: Install emulator image
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "emulator" "platform-tools" "system-images;android-29;google_apis;x86_64"
-          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -f -n drop -k "system-images;android-29;google_apis;x86_64"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/drop-avds"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -f -n drop --path "$ANDROID_AVD_HOME/drop.avd" -k "system-images;android-29;google_apis;x86_64"
+          test -f "$ANDROID_AVD_HOME/drop.avd/config.ini"
+          printf 'avd.ini.encoding=UTF-8\npath=%s/drop.avd\ntarget=android-29\n' "$ANDROID_AVD_HOME" > "$ANDROID_AVD_HOME/drop.ini"
       - name: Launch game and inspect its UI on Android 10
         timeout-minutes: 7
         run: |
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           sudo chmod 666 /dev/kvm
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/drop-avds"
           ls "$ANDROID_AVD_HOME" || true
           df -h /tmp
           adb start-server

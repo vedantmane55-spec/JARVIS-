@@ -6,7 +6,25 @@ platform="$sdk/platforms/android-35/android.jar"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 mkdir -p "$out/assets" "$out/classes" "$out/dex" dist
-cp index.html "$out/assets/"
+# Android 10 can ship an older Chromium engine. Downlevel syntax for the bundled game.
+python3 - "$out" <<'PY'
+from pathlib import Path
+import sys
+out=Path(sys.argv[1])
+prefix,tail=Path('index.html').read_text().split('<script>',1)
+script,suffix=tail.split('</script>',1)
+(out/'source.js').write_text(script)
+(out/'assets/index.html').write_text(prefix+'<script>\n__DROP_SCRIPT__\n</script>'+suffix)
+PY
+npx --yes --package=esbuild@0.25.12 esbuild "$out/source.js" --target=chrome70 --outfile="$out/legacy.js"
+python3 - "$out" <<'PY'
+from pathlib import Path
+import sys
+out=Path(sys.argv[1])
+page=out/'assets/index.html'
+compat="if(!Element.prototype.replaceChildren){Element.prototype.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);this.append.apply(this,arguments)}};\n"
+page.write_text(page.read_text().replace('__DROP_SCRIPT__',compat+(out/'legacy.js').read_text()))
+PY
 "$bt/aapt2" link -I "$platform" --manifest android/AndroidManifest.xml -A "$out/assets" -o "$out/base.apk"
 javac -source 8 -target 8 -classpath "$platform" -d "$out/classes" android/DropActivity.java
 jar cf "$out/game.jar" -C "$out/classes" .
