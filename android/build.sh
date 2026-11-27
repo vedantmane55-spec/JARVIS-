@@ -8,7 +8,7 @@ trap 'rm -rf "$out"' EXIT
 mkdir -p "$out/assets" "$out/classes" "$out/dex" dist
 cp index.html "$out/assets/"
 "$bt/aapt2" link -I "$platform" --manifest android/AndroidManifest.xml -A "$out/assets" -o "$out/base.apk"
-javac -source 8 -target 8 -bootclasspath "$platform" -d "$out/classes" android/DropActivity.java
+javac -source 8 -target 8 -classpath "$platform" -d "$out/classes" android/DropActivity.java
 jar cf "$out/game.jar" -C "$out/classes" .
 "$bt/d8" --lib "$platform" --min-api 24 --output "$out/dex" "$out/game.jar"
 (cd "$out/dex" && zip -q "$out/base.apk" classes.dex)
