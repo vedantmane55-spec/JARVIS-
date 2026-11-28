@@ -1,0 +1,2 @@
+# ULTRON AI
+Independent Android prototype. Android 6+ minimum. Current features: red orb, tap-to-speak via installed speech recognizer, Android TTS, local greeting. Gemini, ElevenLabs, persistent memory, wake word and mobile actions are not implemented yet. No API keys should be committed to this public repository. Build with JDK 17, Android SDK 35 and Gradle 8.9: `gradle :app:assembleDebug` from this directory. Not yet compiled or device tested.
